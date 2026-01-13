@@ -1,0 +1,15 @@
+# 忽略巨大的工具包
+node_modules/
+
+# 忽略打包后的成品（我们要传的是源代码，不是成品）
+dist/
+build/
+
+# 忽略环境配置文件（保护隐私）
+.env
+.env.local
+
+# 忽略 VS Code 自己的配置和系统临时文件
+.vscode/
+.DS_Store
+Thumbs.db
