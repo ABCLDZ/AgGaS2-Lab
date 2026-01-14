@@ -31,24 +31,37 @@ export const generateGaussianSpectrum = (centerWl, fwhm) => {
 export const getBlueLEDSpectrum = () => generateGaussianSpectrum(455, 20);
 
 // 计算发射参数 (Core-Shell, Time, Radius)
+// 核心逻辑：模拟 AgGaS2 的带隙调控与“反常蓝移”
 export const calculateEmissionParams = (radiusNm, reactionTime = 30, isCoreShell = false) => {
-  const Eg_bulk = 2.73; 
+  const Eg_bulk = 2.73; // AgGaS2 体材料带隙 (eV)
+  
+  // 量子限域效应 (Brus 公式简化版)
   const confinement = 0.8 / (radiusNm * radiusNm); 
+  // 库仑相互作用修正
   const coulomb = 0.3 / radiusNm;
+  // 缺陷能级 Stokes 位移 (模拟从导带底到缺陷能级的跃迁)
   const defectShift = 0.65 + (0.1 / radiusNm); 
 
+  // 基础发射能量
   let emissionEnergy = Eg_bulk + confinement - coulomb - defectShift;
 
+  // --- 论文关键点复现：反应时间导致的蓝移 ---
+  // 现象：反应时间 30min -> 90min，发光波长从 570nm 蓝移至 520nm (能量增加)
+  // 原因推测：合金化 (AgGaS2 -> Ga2S3) 或表面态钝化
   if (reactionTime > 30) {
-    const timeFactor = (reactionTime - 30) * (0.17 / 60);
+    const timeFactor = (reactionTime - 30) * (0.17 / 60); // 线性插值模拟蓝移能量增量
     emissionEnergy += timeFactor; 
   }
 
+  // 核壳结构 (ZnS Shell) 导致的微小红移与稳定性提升
   if (isCoreShell) {
     emissionEnergy -= 0.09; 
   }
 
+  // 能量转波长: lambda = 1240 / E
   let peakWl = 1240 / emissionEnergy;
+  
+  // 限制范围防止报错
   peakWl = Math.min(Math.max(peakWl, 400), 700);
 
   return { 
@@ -58,27 +71,38 @@ export const calculateEmissionParams = (radiusNm, reactionTime = 30, isCoreShell
 };
 
 // 混合光谱生成 (Zr Doping)
+// 核心逻辑：模拟 Zr4+ 掺杂导致的能量转移与猝灭
 export const generateCompositeSpectrum = (baseWl, fwhm, zrConc = 0) => {
   const data = [];
+  
+  // Zr 相关的缺陷发光峰 (论文观测值 ~470nm)
   const zrPeakWl = 470; 
   const zrPeakFwhm = 25; 
 
+  // 归一化浓度 (0 ~ 0.3 mmol)
   const maxConc = 0.3;
   const normalizedConc = Math.min(zrConc / maxConc, 1.0); 
 
+  // 能量转移竞争机制：
+  // 随着 Zr 浓度增加，基质发光 (baseWeight) 下降，缺陷发光 (zrWeight) 上升
   const baseWeight = 1.0 - normalizedConc; 
   const zrWeight = normalizedConc * 1.5;   
 
   for (let wl = 380; wl <= 780; wl += 5) {
+    // 1. AgGaS2 本征发光
     const sigma1 = fwhm / 2.355;
     const intensity1 = baseWeight * Math.exp(-Math.pow(wl - baseWl, 2) / (2 * Math.pow(sigma1, 2)));
+    
+    // 2. Zr 杂质峰发光
     const sigma2 = zrPeakFwhm / 2.355;
     const intensity2 = zrWeight * Math.exp(-Math.pow(wl - zrPeakWl, 2) / (2 * Math.pow(sigma2, 2)));
+    
     data.push({ wl, intensity: intensity1 + intensity2 });
   }
   return data;
 };
 
+// 光谱转 RGB 颜色 (CIE XYZ 算法)
 export const calculateColorFromSpectrum = (spectrum) => {
   let X = 0, Y = 0, Z = 0;
   spectrum.forEach(p => {
@@ -96,6 +120,7 @@ export const calculateColorFromSpectrum = (spectrum) => {
   const cx = (X / sum).toFixed(4);
   const cy = (Y / sum).toFixed(4);
 
+  // XYZ to sRGB 矩阵变换
   let r = 3.2406 * X - 1.5372 * Y - 0.4986 * Z;
   let g = -0.9689 * X + 1.8758 * Y + 0.0415 * Z;
   let b = 0.0557 * X - 0.2040 * Y + 1.0570 * Z;
@@ -103,6 +128,7 @@ export const calculateColorFromSpectrum = (spectrum) => {
   const max = Math.max(r, g, b, 1);
   r = r / max; g = g / max; b = b / max; 
 
+  // Gamma 校正
   const gammaCorrect = (c) => c > 0.0031308 ? 1.055 * Math.pow(c, 1 / 2.4) - 0.055 : 12.92 * c;
   
   r = gammaCorrect(Math.max(r, 0));
@@ -116,15 +142,20 @@ export const calculateColorFromSpectrum = (spectrum) => {
   return { hex: `rgb(${R},${G},${B})`, x: cx, y: cy };
 };
 
+// 显色指数 (CRI) 估算
+// 基于 R/G/B 比例的简化算法，用于实时演示
 export const calculateCRI = (spectrum) => {
   let total = 0, r = 0, g = 0, b = 0;
   spectrum.forEach(p => {
     total += p.intensity;
-    if(p.wl > 600) r += p.intensity;
-    else if(p.wl > 510) g += p.intensity;
-    else b += p.intensity;
+    if(p.wl > 600) r += p.intensity; // 红光分量
+    else if(p.wl > 510) g += p.intensity; // 绿光分量
+    else b += p.intensity; // 蓝光分量
   });
+  
   if (total === 0) return 0;
+  
+  // 白光平衡度越好，CRI 越高
   const balance = (Math.min(r, g, b * 1.5) / (total / 3.5)); 
   return Math.min(Math.round(60 + balance * 40), 98);
 };
@@ -253,7 +284,6 @@ export const getLatticeStructure = (mode = 'unit', zrConc = 0) => {
 
       if (dist < bondThreshold) {
         // 避免重复键 (只存单向，或渲染时无所谓)
-        // 这里简单存一下
         bonds.push({
           start: atom1.pos,
           end: atom2.pos,
