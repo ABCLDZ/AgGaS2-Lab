@@ -17,7 +17,7 @@ const CMF = {
   700: [0.0114, 0.0041, 0.0000], 710: [0.0058, 0.0021, 0.0000], 720: [0.0029, 0.0010, 0.0000], 730: [0.0014, 0.0005, 0.0000]
 };
 
-// 基础光谱生成工具
+// 基础光谱生成工具 (高斯分布)
 export const generateGaussianSpectrum = (centerWl, fwhm) => {
   const sigma = fwhm / 2.355;
   const data = [];
@@ -28,40 +28,49 @@ export const generateGaussianSpectrum = (centerWl, fwhm) => {
   return data;
 };
 
+// 模拟蓝光 LED 激发源 (455nm)
 export const getBlueLEDSpectrum = () => generateGaussianSpectrum(455, 20);
 
-// 计算发射参数 (Core-Shell, Time, Radius)
-// 核心逻辑：模拟 AgGaS2 的带隙调控与“反常蓝移”
+/**
+ * 核心物理计算：AgGaS2 量子点能带与发射波长
+ * @param {number} radiusNm - 量子点半径
+ * @param {number} reactionTime - 反应时间 (影响反常蓝移)
+ * @param {boolean} isCoreShell - 是否包覆 ZnS 壳层 (影响红移)
+ */
 export const calculateEmissionParams = (radiusNm, reactionTime = 30, isCoreShell = false) => {
   const Eg_bulk = 2.73; // AgGaS2 体材料带隙 (eV)
   
-  // 量子限域效应 (Brus 公式简化版)
+  // 1. 量子限域效应 (Brus 公式简化版): 尺寸越小，带隙越大
   const confinement = 0.8 / (radiusNm * radiusNm); 
-  // 库仑相互作用修正
+  // 2. 库仑相互作用修正
   const coulomb = 0.3 / radiusNm;
-  // 缺陷能级 Stokes 位移 (模拟从导带底到缺陷能级的跃迁)
+  // 3. 缺陷能级 Stokes 位移 (模拟从导带底到缺陷能级的跃迁)
   const defectShift = 0.65 + (0.1 / radiusNm); 
 
-  // 基础发射能量
+  // 基础发射能量 (eV)
   let emissionEnergy = Eg_bulk + confinement - coulomb - defectShift;
 
-  // --- 论文关键点复现：反应时间导致的蓝移 ---
-  // 现象：反应时间 30min -> 90min，发光波长从 570nm 蓝移至 520nm (能量增加)
-  // 原因推测：合金化 (AgGaS2 -> Ga2S3) 或表面态钝化
+  // --- 物理复现 A: 反应时间导致的"反常蓝移" ---
+  // 现象：反应时间 30min -> 90min，波长 570nm -> 520nm (能量增加)
+  // 机制：Ga2S3 合金化效应或表面态钝化
   if (reactionTime > 30) {
-    const timeFactor = (reactionTime - 30) * (0.17 / 60); // 线性插值模拟蓝移能量增量
+    // 线性插值：每增加 60min，能量增加约 0.17 eV
+    const timeFactor = (reactionTime - 30) * (0.17 / 60); 
     emissionEnergy += timeFactor; 
   }
 
-  // 核壳结构 (ZnS Shell) 导致的微小红移与稳定性提升
+  // --- 物理复现 B: ZnS 壳层导致的"红移" ---
+  // 现象：包覆 ZnS 壳层后，波长发生红移 (能量降低)
+  // 机制：电子波函数泄漏(Tunneling)及晶格失配应力
   if (isCoreShell) {
-    emissionEnergy -= 0.09; 
+    const shellShift = 0.09; // 对应约 20nm 的红移
+    emissionEnergy -= shellShift; 
   }
 
-  // 能量转波长: lambda = 1240 / E
+  // 能量转波长公式: lambda = 1240 / E
   let peakWl = 1240 / emissionEnergy;
   
-  // 限制范围防止报错
+  // 限制波长范围，防止数值溢出
   peakWl = Math.min(Math.max(peakWl, 400), 700);
 
   return { 
@@ -70,33 +79,40 @@ export const calculateEmissionParams = (radiusNm, reactionTime = 30, isCoreShell
   };
 };
 
-// 混合光谱生成 (Zr Doping)
-// 核心逻辑：模拟 Zr4+ 掺杂导致的能量转移与猝灭
+/**
+ * 混合光谱生成逻辑
+ * @param {number} baseWl - 基质(AgGaS2)的主峰波长
+ * @param {number} fwhm - 半峰宽
+ * @param {number} zrConc - Zr 掺杂浓度 (0 - 0.3 mmol)
+ */
 export const generateCompositeSpectrum = (baseWl, fwhm, zrConc = 0) => {
   const data = [];
   
-  // Zr 相关的缺陷发光峰 (论文观测值 ~470nm)
+  // Zr 掺杂引入的特征发光峰 (论文观测值 ~470nm，位置相对固定)
   const zrPeakWl = 470; 
   const zrPeakFwhm = 25; 
 
-  // 归一化浓度 (0 ~ 0.3 mmol)
+  // 归一化浓度处理
   const maxConc = 0.3;
   const normalizedConc = Math.min(zrConc / maxConc, 1.0); 
 
-  // 能量转移竞争机制：
-  // 随着 Zr 浓度增加，基质发光 (baseWeight) 下降，缺陷发光 (zrWeight) 上升
+  // --- 物理复现 C: 能量转移与猝灭机制 ---
+  // 随着 Zr 浓度增加，能量从基质转移到 Zr 缺陷中心
+  // 1. 基质峰 (Base) 强度下降 (Quenching)
   const baseWeight = 1.0 - normalizedConc; 
+  // 2. 杂质峰 (Zr) 强度上升
   const zrWeight = normalizedConc * 1.5;   
 
   for (let wl = 380; wl <= 780; wl += 5) {
-    // 1. AgGaS2 本征发光
+    // 计算 AgGaS2 主峰分量
     const sigma1 = fwhm / 2.355;
     const intensity1 = baseWeight * Math.exp(-Math.pow(wl - baseWl, 2) / (2 * Math.pow(sigma1, 2)));
     
-    // 2. Zr 杂质峰发光
+    // 计算 Zr 杂质峰分量
     const sigma2 = zrPeakFwhm / 2.355;
     const intensity2 = zrWeight * Math.exp(-Math.pow(wl - zrPeakWl, 2) / (2 * Math.pow(sigma2, 2)));
     
+    // 叠加光谱
     data.push({ wl, intensity: intensity1 + intensity2 });
   }
   return data;
